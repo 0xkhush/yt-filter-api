@@ -12,6 +12,8 @@ import os
 import re
 import string
 import joblib
+import numpy as np
+from scipy.sparse import hstack, csr_matrix
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -26,21 +28,24 @@ CORS(app)  # Allow requests from browser extensions
 MODEL_DIR = "model"
 VECTORIZER_PATH = os.path.join(MODEL_DIR, "vectorizer.pkl")
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "classifier.pkl")
+SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
 
 
 def load_model():
-    """Load the trained model and vectorizer."""
-    if not os.path.exists(VECTORIZER_PATH) or not os.path.exists(CLASSIFIER_PATH):
-        raise FileNotFoundError(
-            "Model files not found. Run `python train_model.py` first."
-        )
+    """Load the trained model, vectorizer, and scaler."""
+    for path in [VECTORIZER_PATH, CLASSIFIER_PATH, SCALER_PATH]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"{path} not found. Run `python train_model.py` first."
+            )
     vectorizer = joblib.load(VECTORIZER_PATH)
     classifier = joblib.load(CLASSIFIER_PATH)
-    return vectorizer, classifier
+    scaler = joblib.load(SCALER_PATH)
+    return vectorizer, classifier, scaler
 
 
 print("🔄 Loading model...")
-vectorizer, classifier = load_model()
+vectorizer, classifier, scaler = load_model()
 print("✅ Model loaded successfully!")
 
 
@@ -53,6 +58,28 @@ def preprocess_text(text: str) -> str:
     text = text.translate(str.maketrans("", "", string.punctuation))
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def extract_engineered_features(raw_text: str) -> np.ndarray:
+    """Extract hand-crafted features from raw text — must match training."""
+    text = str(raw_text)
+    alpha_chars = sum(1 for c in text if c.isalpha())
+    upper_chars = sum(1 for c in text if c.isupper())
+
+    caps_ratio = upper_chars / max(alpha_chars, 1)
+    exclamation_count = text.count("!")
+    question_count = text.count("?")
+    text_length = len(text)
+    emoji_count = sum(1 for c in text if ord(c) > 127)
+    word_count = len(text.split())
+    avg_word_len = sum(len(w) for w in text.split()) / max(word_count, 1)
+    all_caps_words = sum(1 for w in text.split() if w.isupper() and len(w) > 1)
+
+    return np.array([[
+        caps_ratio, exclamation_count, question_count,
+        text_length, emoji_count, word_count,
+        avg_word_len, all_caps_words,
+    ]])
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -95,14 +122,18 @@ def predict():
     if not title and not description:
         return jsonify({"error": "At least 'title' or 'description' is required"}), 400
 
-    # ── Preprocess ────────────────────────────────────────────────────────────
-    combined_text = f"{channel} {title} {description}"
-    cleaned_text = preprocess_text(combined_text)
+    # ── Preprocess ──────────────────────────────────────────────────────────
+    combined_raw = f"{channel} {title} {description}"
+    cleaned_text = preprocess_text(combined_raw)
 
-    # ── Predict ───────────────────────────────────────────────────────────────
+    # ── Predict ─────────────────────────────────────────────────────────────
     text_vector = vectorizer.transform([cleaned_text])
-    prediction = classifier.predict(text_vector)[0]
-    probabilities = classifier.predict_proba(text_vector)[0]
+    eng_features = extract_engineered_features(combined_raw)
+    eng_scaled = scaler.transform(eng_features)
+    combined = hstack([text_vector, csr_matrix(eng_scaled)])
+
+    prediction = classifier.predict(combined)[0]
+    probabilities = classifier.predict_proba(combined)[0]
 
     is_constructive = bool(prediction == 1)
     confidence = float(max(probabilities))
