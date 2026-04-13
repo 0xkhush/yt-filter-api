@@ -110,9 +110,9 @@ def main():
     print(f"   Train: {len(X_text_train)} | Test: {len(X_text_test)}\n")
 
     # ── TF-IDF Vectorization ─────────────────────────────────────────────────
-    print("📊 Fitting TF-IDF vectorizer (trigrams, 20k features)...")
+    print("📊 Fitting TF-IDF vectorizer (trigrams, 50k features)...")
     vectorizer = TfidfVectorizer(
-        max_features=20000,
+        max_features=50000,
         stop_words="english",
         ngram_range=(1, 3),  # unigrams + bigrams + trigrams
         min_df=2,
@@ -143,11 +143,12 @@ def main():
     print(f"   Combined features: {X_train_combined.shape[1]}\n")
 
     # ── Train Classifier ─────────────────────────────────────────────────────
-    print("🧠 Training Logistic Regression (C=10)...")
+    print("🧠 Training Logistic Regression (C=10, balanced)...")
     classifier = LogisticRegression(
         solver="liblinear",
-        max_iter=1000,
+        max_iter=2000,
         C=10.0,
+        class_weight="balanced",
         random_state=42,
     )
     classifier.fit(X_train_combined, y_train)
