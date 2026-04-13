@@ -77,15 +77,18 @@ def extract_engineered_features(raw_texts):
 
 def main():
     # ── Load Data ─────────────────────────────────────────────────────────────
-    data_path = "data/training_data.csv"
+    data_path = "data/real_training_data.csv"
+
     if not os.path.exists(data_path):
         print(f"❌ Data file not found: {data_path}")
-        print("   Run `python generate_data.py` first.")
+        print("   Run `python3 fetch_real_data.py` first.")
         return
 
-    print("📂 Loading training data...")
+    print("📂 Loading real YouTube training data...")
     df = pd.read_csv(data_path)
-    print(f"   Loaded {len(df)} samples")
+    df = df[["channel_name", "title", "description", "label"]].copy()
+    df = df.drop_duplicates(subset=["title", "channel_name"], keep="first")
+    print(f"   Total: {len(df)} samples (after dedup)")
     print(f"   Label distribution:\n{df['label'].value_counts().to_string()}\n")
 
     # ── Combine Features ──────────────────────────────────────────────────────
