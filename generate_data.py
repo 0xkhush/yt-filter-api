@@ -900,12 +900,12 @@ def main():
         seen = set()
         samples = []
         attempts = 0
-        max_attempts = count * 20  # More headroom for 100k unique samples
+        max_attempts = count * 30  # More headroom for 100k unique samples
         while len(samples) < count and attempts < max_attempts:
             attempts += 1
             ch, title, desc = gen_fn()
-            # Use hash of title for faster dedup
-            key = hashlib.md5(title.encode()).hexdigest()
+            # Use hash of title + desc for dedup (desc is always unique due to random combos)
+            key = hashlib.md5((title + desc).encode()).hexdigest()
             if key not in seen:
                 seen.add(key)
                 samples.append({
