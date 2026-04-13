@@ -145,6 +145,76 @@ def predict():
     }), 200
 
 
+@app.route("/predict/batch", methods=["POST"])
+def predict_batch():
+    """
+    Classify multiple YouTube videos in one request.
+    Used by the feed pre-scanner for instant classification.
+
+    Request JSON:
+    {
+        "videos": [
+            {"channel": "3Blue1Brown", "title": "Linear Algebra"},
+            {"channel": "MrBeast", "title": "24 Hour Challenge"}
+        ]
+    }
+
+    Response JSON:
+    {
+        "results": [
+            {"constructive": true, "confidence": 0.94},
+            {"constructive": false, "confidence": 0.91}
+        ]
+    }
+    """
+    data = request.get_json(silent=True)
+    if not data or "videos" not in data:
+        return jsonify({"error": "'videos' array is required"}), 400
+
+    videos = data["videos"][:50]  # Cap at 50 per batch
+
+    if not videos:
+        return jsonify({"results": []}), 200
+
+    # Preprocess all videos
+    cleaned_texts = []
+    raw_texts = []
+    for v in videos:
+        ch = v.get("channel", "")
+        ti = v.get("title", "")
+        desc = v.get("description", "")
+        raw = f"{ch} {ti} {desc}"
+        raw_texts.append(raw)
+        cleaned_texts.append(preprocess_text(raw))
+
+    # Vectorize all at once (much faster than one-by-one)
+    text_vectors = vectorizer.transform(cleaned_texts)
+
+    # Engineered features for all
+    eng_features_list = []
+    for raw in raw_texts:
+        eng_features_list.append(extract_engineered_features(raw)[0])
+    eng_matrix = np.array(eng_features_list)
+    eng_scaled = scaler.transform(eng_matrix)
+
+    combined = hstack([text_vectors, csr_matrix(eng_scaled)])
+
+    # Predict all at once
+    predictions = classifier.predict(combined)
+    probabilities = classifier.predict_proba(combined)
+
+    results = []
+    for i in range(len(videos)):
+        is_constructive = bool(predictions[i] == 1)
+        confidence = float(max(probabilities[i]))
+        results.append({
+            "constructive": is_constructive,
+            "confidence": round(confidence, 4),
+        })
+
+    return jsonify({"results": results}), 200
+
+
 # ─── Error Handlers ──────────────────────────────────────────────────────────
 
 @app.errorhandler(404)
