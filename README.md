@@ -1,23 +1,29 @@
 # 🎯 YouTube Content Classifier API
 
-A lightweight Python API server that classifies YouTube videos as **constructive** or **non-constructive** using Machine Learning. Built to run on a **1GB RAM Oracle VM** — fast, minimal, and production-ready.
+An AI-powered Python API that classifies YouTube videos as **constructive** or **non-constructive** using Machine Learning trained on **9,000+ real YouTube videos**. Built to power a Chrome extension and deployed on a **1GB RAM Oracle VM** — fast, minimal, and production-ready.
 
-> **Constructive** = Education, Music, News, Science → `"yes"`  
-> **Non-constructive** = Gaming, Vlogs, Pranks, Clickbait → `"no"`
+> **Constructive** = Education, Music, News, Science & Tech → `"yes"`  
+> **Non-constructive** = Gaming, Vlogs, Pranks, Clickbait, Gossip → `"no"`
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌──────────────────┐        POST /predict        ┌──────────────────────┐
-│  Browser Extension│ ─────────────────────────▸ │   Flask API Server    │
-│                    │                            │                      │
-│  Sends:            │                            │  1. TF-IDF Vectorize │
-│  • channel name    │      { constructive: true,│  2. Engineer Features│
-│  • title           │ ◂───  confidence: 0.94,    │  3. Logistic Regress.│
-│  • description     │        message: "yes" }    │                      │
-└──────────────────┘                              └──────────────────────┘
+┌──────────────────────┐                           ┌───────────────────────┐
+│   Chrome Extension    │    POST /predict          │   Flask API Server    │
+│                       │ ──────────────────────▸   │                       │
+│  Content Script:      │                           │  1. TF-IDF Vectorize  │
+│  • Scrapes metadata   │   { constructive: true,   │  2. Engineer Features │
+│  • Pre-scans feed     │ ◂── confidence: 0.94 }    │  3. Logistic Regress. │
+│                       │                           │                       │
+│  Feed Pre-Scanner:    │    POST /predict/batch     │  Batch prediction     │
+│  • Scans thumbnails   │ ──────────────────────▸   │  (up to 50 at once)   │
+│  • Dims non-constr.   │                           │                       │
+└──────────────────────┘                           └───────────────────────┘
+        ▲                                                    │
+        │              Oracle Cloud VM (1GB RAM)             │
+        └────────────── gunicorn + systemd ──────────────────┘
 ```
 
 ---
@@ -26,8 +32,8 @@ A lightweight Python API server that classifies YouTube videos as **constructive
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/0xkhush/0xkhush_server.git
-cd 0xkhush_server
+git clone https://github.com/0xkhush/yt-filter-api.git
+cd yt-filter-api
 
 # 2. Create virtual environment
 python3 -m venv venv
@@ -36,14 +42,14 @@ source venv/bin/activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Generate training data (20k samples)
-python generate_data.py
+# 4. Fetch real YouTube training data (requires API keys)
+python3 fetch_real_data.py
 
 # 5. Train the model
-python train_model.py
+python3 train_model.py
 
 # 6. Start the server
-python server.py
+python3 server.py
 ```
 
 Server starts at `http://localhost:8080`
@@ -54,14 +60,14 @@ Server starts at `http://localhost:8080`
 
 ### `POST /predict`
 
-Classify a YouTube video as constructive or non-constructive.
+Classify a single YouTube video.
 
 **Request:**
 ```json
 {
   "channel": "3Blue1Brown",
   "title": "Linear Algebra Explained Visually",
-  "description": "A visual guide to understanding linear transformations and matrices with geometric intuition."
+  "description": "A visual guide to understanding linear transformations and matrices."
 }
 ```
 
@@ -80,6 +86,34 @@ Classify a YouTube video as constructive or non-constructive.
 | `title` | string | Video title (**required** — at least title or description) |
 | `description` | string | Video description (**required** — at least title or description) |
 
+---
+
+### `POST /predict/batch`
+
+Classify up to 50 videos in a single request. Used by the feed pre-scanner for instant classification of all visible thumbnails.
+
+**Request:**
+```json
+{
+  "videos": [
+    { "channel": "3Blue1Brown", "title": "Linear Algebra" },
+    { "channel": "MrBeast", "title": "24 Hour Challenge" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    { "constructive": true, "confidence": 0.94 },
+    { "constructive": false, "confidence": 0.91 }
+  ]
+}
+```
+
+---
+
 ### `GET /health`
 
 Health check endpoint.
@@ -94,38 +128,42 @@ Health check endpoint.
 
 ### Algorithm
 
-**TF-IDF (Trigrams) + Engineered Features → Logistic Regression**
+**TF-IDF (Trigrams, 50K features) + Engineered Features → Logistic Regression**
 
 | Component | Details |
 |---|---|
-| **Vectorizer** | TF-IDF with unigrams, bigrams, and trigrams (20,000 features) |
+| **Vectorizer** | TF-IDF with unigrams, bigrams, and trigrams (50,000 features) |
 | **Engineered Features** | 8 hand-crafted signals (caps ratio, !, ?, text length, emoji count, word count, avg word length, ALL CAPS words) |
-| **Classifier** | Logistic Regression (C=10, liblinear solver) |
-| **Total Features** | 20,008 |
-| **Training Data** | 20,000 samples (50/50 balanced split) |
-| **Test Accuracy** | 100% on held-out test set (4,000 samples) |
-| **Model Size** | ~1.08 MB total |
+| **Classifier** | Logistic Regression (C=10, liblinear solver, balanced class weights) |
+| **Total Features** | 50,008 |
+| **Training Data** | 9,000+ real YouTube videos (API-fetched & Selenium-scraped) |
+| **Test Accuracy** | **99.4%** on held-out test set (1,792 samples) |
+| **Precision** | 0.993 |
+| **Recall** | 0.996 |
+| **F1 Score** | 0.9945 |
+| **Model Size** | ~28 MB total |
+
+### Performance Metrics
+
+```
+              precision    recall  f1-score   support
+
+Non-constructive       0.99      0.99      0.99       793
+    Constructive       0.99      1.00      0.99       999
+
+        accuracy                           0.99      1792
+```
+
+**Confusion Matrix:** TN=786, FP=7, FN=4, TP=995
 
 ### Why This Stack?
 
-- ✅ **Low memory** — runs comfortably on 1GB RAM (~100-150MB total)
-- ✅ **Fast inference** — predictions in <5ms
+- ✅ **Low memory** — runs comfortably on 1GB RAM (~200 MB total)
+- ✅ **Fast inference** — single predictions in <10ms, batch of 50 in <50ms
 - ✅ **No GPU needed** — pure CPU, no heavy dependencies
 - ✅ **Easy to deploy** — just Python + pip, no Docker required
-- ✅ **Good accuracy** — 100% on test set, robust on real YouTube data
-
-### Training Data Categories
-
-| Label | Category | Examples |
-|---|---|---|
-| ✅ `1` | **Education** | Khan Academy, 3Blue1Brown, MIT OCW, CrashCourse |
-| ✅ `1` | **Music** | Lofi Girl, Arijit Singh, Classical Music, Orchestras |
-| ✅ `1` | **News** | BBC, NDTV, Reuters, Bloomberg, CNN |
-| ✅ `1` | **Science** | NASA, Kurzgesagt, Veritasium, NileRed |
-| ❌ `0` | **Entertainment/Vlogs** | MrBeast, PewDiePie, David Dobrik, CarryMinati |
-| ❌ `0` | **Gaming** | Techno Gamerz, Ninja, Dream, xQc |
-| ❌ `0` | **Pranks/Drama** | Drama Alert, NELK, Stokes Twins |
-| ❌ `0` | **Clickbait/Gossip** | Bright Side, TMZ, 5-Minute Crafts |
+- ✅ **Real data** — trained on 9,000+ actual YouTube videos, not synthetic data
+- ✅ **Batch endpoint** — classify 50 videos in a single HTTP request
 
 ### Engineered Features
 
@@ -135,7 +173,7 @@ These hand-crafted features capture **stylistic signals** that pure bag-of-words
 |---|---|
 | `caps_ratio` | Clickbait/pranks use MUCH more CAPS |
 | `exclamation_count` | Non-constructive content abuses exclamations!!! |
-| `question_count` | "You won't BELIEVE???" vs calm educational tone |
+| `question_count` | "You won't BELIEVE????" vs calm educational tone |
 | `text_length` | Educational descriptions tend to be longer |
 | `emoji_count` | Vlogs/pranks use many emojis 😱🔥💀 |
 | `word_count` | More words = usually more substantive content |
@@ -144,21 +182,58 @@ These hand-crafted features capture **stylistic signals** that pure bag-of-words
 
 ---
 
+## 📊 Data Pipeline
+
+### Real Data Collection
+
+The training data is collected from **real YouTube videos** via the YouTube Data API v3:
+
+#### YouTube Data API v3 Fetcher (`fetch_real_data.py`)
+
+- Uses **multi-key rotation** (3 API keys, 30K units total)
+- Fetches video metadata: title, channel, description, category
+- **80+ search queries** across educational and non-constructive categories
+- **Incremental saving** — data is saved after each category, zero data loss on crash
+- Auto-rotates to next key when one hits 403 quota limit
+
+```bash
+# Add your API keys to fetch_real_data.py, then:
+python3 fetch_real_data.py
+```
+
+### Training Data Categories
+
+| Label | Category | Examples |
+|---|---|---|
+| ✅ `1` | **Education** | Khan Academy, 3Blue1Brown, MIT OCW, CrashCourse |
+| ✅ `1` | **Music** | Lofi Girl, Arijit Singh, Classical Music, Orchestras |
+| ✅ `1` | **News** | BBC, NDTV, Reuters, Bloomberg, CNN |
+| ✅ `1` | **Science** | NASA, Kurzgesagt, Veritasium, NileRed |
+| ✅ `1` | **Technology** | Fireship, NetworkChuck, Computerphile |
+| ❌ `0` | **Entertainment/Vlogs** | MrBeast, PewDiePie, David Dobrik, CarryMinati |
+| ❌ `0` | **Gaming** | Techno Gamerz, Ninja, Dream, xQc |
+| ❌ `0` | **Pranks/Drama** | Drama Alert, NELK, Stokes Twins |
+| ❌ `0` | **Clickbait/Gossip** | Bright Side, TMZ, 5-Minute Crafts |
+
+---
+
 ## 📁 Project Structure
 
 ```
-0xkhush_server/
-├── README.md              # You're here
-├── requirements.txt       # Python dependencies
-├── generate_data.py       # Generates 20k training samples
-├── train_model.py         # Trains TF-IDF + LogReg model
-├── server.py              # Flask API server
+yt-filter-api/
+├── README.md                 # You're here
+├── requirements.txt          # Python dependencies
+├── server.py                 # Flask API server (/predict, /predict/batch, /health)
+├── train_model.py            # Trains TF-IDF + LogReg on real data
+├── fetch_real_data.py        # YouTube API v3 fetcher (multi-key rotation)
+├── generate_data.py          # Legacy synthetic data generator (deprecated)
 ├── data/
-│   └── training_data.csv  # Generated training data (20k rows)
+│   ├── real_training_data.csv    # Real YouTube data (9,000+ videos, ~14 MB)
+│   └── fetched_video_ids.json    # Tracks API-fetched IDs (dedup)
 └── model/
-    ├── vectorizer.pkl     # TF-IDF vectorizer (~0.93 MB)
-    ├── classifier.pkl     # Logistic Regression model (~0.15 MB)
-    └── scaler.pkl         # Feature scaler (~0.01 MB)
+    ├── vectorizer.pkl        # TF-IDF vectorizer (~28 MB)
+    ├── classifier.pkl        # Logistic Regression model (~0.4 MB)
+    └── scaler.pkl            # Feature scaler (~0.001 MB)
 ```
 
 ---
@@ -168,42 +243,37 @@ These hand-crafted features capture **stylistic signals** that pure bag-of-words
 ### Step 1: Server Setup
 
 ```bash
-# Update system
 sudo apt update && sudo apt upgrade -y
-
-# Install Python
 sudo apt install python3 python3-pip python3-venv -y
 ```
 
 ### Step 2: Upload & Configure
 
 ```bash
-# Upload project files to the VM (via scp, git, etc.)
-cd /home/ubuntu/0xkhush_server
-
-# Create virtual environment
+cd /home/ubuntu/yt-filter-api
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Step 3: Generate Data & Train Model (One-Time)
+### Step 3: Train Model (One-Time)
 
 ```bash
-python generate_data.py    # ~2 seconds
-python train_model.py      # ~5 seconds
+# If you have real data:
+python3 train_model.py
+
+# Or upload pre-trained model files:
+scp model/*.pkl ubuntu@YOUR_VM_IP:~/yt-filter-api/model/
 ```
 
 ### Step 4: Run with Gunicorn (Production)
 
 ```bash
 # Single worker, 2 threads — optimized for 1GB RAM
-gunicorn -w 1 --threads 2 -b 0.0.0.0:8080 server:app
+nohup /home/ubuntu/yt-filter-api/venv/bin/gunicorn -w 1 --threads 2 -b 0.0.0.0:8080 server:app > server.log 2>&1 &
 ```
 
-### Step 5: Run as a Systemd Service (Auto-Restart)
+### Step 5: Systemd Service (Auto-Restart)
 
 ```bash
 sudo nano /etc/systemd/system/classifier.service
@@ -216,8 +286,8 @@ After=network.target
 
 [Service]
 User=ubuntu
-WorkingDirectory=/home/ubuntu/0xkhush_server
-ExecStart=/home/ubuntu/0xkhush_server/venv/bin/gunicorn -w 1 --threads 2 -b 0.0.0.0:8080 server:app
+WorkingDirectory=/home/ubuntu/yt-filter-api
+ExecStart=/home/ubuntu/yt-filter-api/venv/bin/gunicorn -w 1 --threads 2 -b 0.0.0.0:8080 server:app
 Restart=always
 RestartSec=3
 
@@ -229,8 +299,6 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable classifier
 sudo systemctl start classifier
-
-# Check status
 sudo systemctl status classifier
 ```
 
@@ -238,7 +306,6 @@ sudo systemctl status classifier
 
 ```bash
 # Oracle Cloud — open port 8080 in security list
-# Also on the VM:
 sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8080 -j ACCEPT
 sudo netfilter-persistent save
 ```
@@ -248,45 +315,41 @@ sudo netfilter-persistent save
 | Component | RAM |
 |---|---|
 | Python + Flask | ~40 MB |
-| TF-IDF Vectorizer | ~50 MB |
-| Classifier + Scaler | ~10 MB |
-| **Total** | **~100-150 MB** |
+| TF-IDF Vectorizer (50K) | ~120 MB |
+| Classifier + Scaler | ~20 MB |
+| **Total** | **~200 MB** |
 
-Leaves ~850 MB free for the OS and other services.
+Leaves ~800 MB free for the OS and other services.
 
 ---
 
 ## 🔌 Browser Extension Integration
 
-Your extension should call the API like this:
+### Single Video Classification
 
 ```javascript
-async function classifyVideo(channel, title, description) {
-  const response = await fetch('http://YOUR_VM_IP:8080/predict', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ channel, title, description })
-  });
-  const data = await response.json();
-  return data; // { constructive: true/false, confidence: 0.94, message: "yes"/"no" }
-}
+const response = await fetch('http://YOUR_VM_IP:8080/predict', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ channel, title, description })
+});
+const data = await response.json();
+// { constructive: true/false, confidence: 0.94, message: "yes"/"no" }
 ```
 
----
+### Batch Feed Pre-Scan (50 videos at once)
 
-## 🧪 Test Results
-
-| Test Input | Channel | Expected | Result | Confidence |
-|---|---|---|---|---|
-| Education | 3Blue1Brown | ✅ yes | ✅ yes | 99.99% |
-| Science | NASA | ✅ yes | ✅ yes | 99.61% |
-| News | NDTV | ✅ yes | ✅ yes | 64.18% |
-| Music (Bollywood) | Arijit Singh | ✅ yes | ✅ yes | 97.35% |
-| Music (Classical) | Classical Music Only | ✅ yes | ✅ yes | 99.97% |
-| Music (Lofi) | Lofi Girl | ✅ yes | ✅ yes | 70.75% |
-| Gaming | Techno Gamerz | ❌ no | ❌ no | 75.96% |
-| Clickbait | Bright Side | ❌ no | ❌ no | 100.0% |
-| Prank | Stokes Twins | ❌ no | ❌ no | 100.0% |
+```javascript
+const response = await fetch('http://YOUR_VM_IP:8080/predict/batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    videos: thumbnails.map(v => ({ channel: v.channel, title: v.title }))
+  })
+});
+const data = await response.json();
+// { results: [{ constructive: true, confidence: 0.94 }, ...] }
+```
 
 ---
 
@@ -299,6 +362,7 @@ scikit-learn==1.6.1   # ML (TF-IDF + LogReg)
 joblib==1.5.0         # Model serialization
 gunicorn==23.0.0      # Production WSGI server
 pandas==2.2.3         # Data handling
+requests              # YouTube API fetching
 ```
 
 ---
